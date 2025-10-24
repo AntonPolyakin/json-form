@@ -1,5 +1,5 @@
 /** 
- * JsonForm | A lightweight JavaScript library for generating dynamic forms from JSON/Object. v1.0.1 (https://github.com/Rmanaf/json-form) 
+ * JsonForm | A lightweight JavaScript library for generating dynamic forms from JSON/Object. v1.0.2 (https://github.com/Rmanaf/json-form) 
  * Licensed under MIT (https://github.com/Rmanaf/json-form/blob/master/LICENSE) 
  */var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
     if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
@@ -78,7 +78,8 @@ var JsonForm;
                 events: {
                     "*": "keyup keypress focus blur change",
                     "*-number": "keyup keypress focus blur change mouseup"
-                }
+                },
+                pattern: /{{\s*([^{}]+)\s*}}/g
             };
             if (typeof data === "string") {
                 var uid = JsonForm.Utilities.uniqueID();
@@ -151,8 +152,9 @@ var JsonForm;
                 e.addEventListener(events[i], l, options);
             }
         };
-        Engine.prototype._createFromTemplate = function (id, path, value, inputType, type, label, template) {
+        Engine.prototype._createFromTemplate = function (options) {
             var _a;
+            var id = options.id, path = options.path, value = options.value, inputType = options.inputType, type = options.type, label = options.label, template = options.template;
             var templateVal = this._o.templates[template];
             var doc = this._o.body.ownerDocument;
             var temp = doc.getElementById(templateVal);
@@ -171,15 +173,18 @@ var JsonForm;
                 dict = JsonForm.Utilities.merge(dict, this._o.meta[meta.match]);
             }
             var args = JsonForm.Utilities.merge(dict, { parsePath: this._parsePath });
-            clone.innerHTML = clone.innerHTML.replace(/{{[^{}]+}}/g, function (key) {
-                var keySeq = key.replace(/[{}]+/g, "").split("|");
-                var result = dict[keySeq[0]] || "";
+            var pattern = this._o.pattern;
+            clone.innerHTML = clone.innerHTML.replace(pattern, function (match, expr) {
+                var _a;
+                var parts = expr.split("|");
+                var key = parts[0];
+                var templateData = parts.slice(1);
+                var result = (_a = dict[key]) !== null && _a !== void 0 ? _a : "";
                 if (typeof result === "function") {
-                    var templateData = keySeq.length ? keySeq.slice(1, keySeq.length) : [];
                     result = result(JsonForm.Utilities.merge(args, { templateData: templateData }));
                 }
                 return result;
-            }.bind(this));
+            });
             var fragment = document.importNode(clone.content, true);
             (_a = this._nodes).push.apply(_a, fragment.childNodes);
             this._appendInput(fragment, path);
@@ -192,7 +197,15 @@ var JsonForm;
             var inputLabel = this.getLabel(path);
             var template = this._pathIncludes(path, Object.keys(this._o.templates), inputType);
             if (template) {
-                this._createFromTemplate(id, path, value, inputType, type, inputLabel, template.match);
+                this._createFromTemplate({
+                    id: id,
+                    path: path,
+                    value: value,
+                    inputType: inputType,
+                    type: type,
+                    label: inputLabel,
+                    template: template.match
+                });
                 input = document.getElementById(id);
                 if (typeof input === "undefined") {
                     if (this._mayLog(LogLevel.Errors)) {
@@ -205,23 +218,25 @@ var JsonForm;
                 input = document.createElement("input");
                 input.setAttribute("id", id);
             }
-            input.setAttribute("name", inputName);
-            if (input instanceof HTMLInputElement) {
-                input.setAttribute("type", inputType);
-            }
-            else {
-                this._setElementData(input, { jfInputType: inputType });
-            }
-            this._setElementData(input, { jfPath: path, jfType: type });
-            input.value = value;
-            if (inputType === "checkbox" && type === "boolean") {
-                input.checked = value;
-            }
-            var attribute = this._pathIncludes(path, Object.keys(this._o.attributes), inputType);
-            if (attribute) {
-                Object.keys(this._o.attributes[attribute.match]).forEach(function (attr) {
-                    input.setAttribute(attr, _this._o.attributes[attribute.match][attr]);
-                });
+            if (input) {
+                input.setAttribute("name", inputName);
+                if (input instanceof HTMLInputElement) {
+                    input.setAttribute("type", inputType);
+                }
+                else {
+                    this._setElementData(input, { jfInputType: inputType });
+                }
+                this._setElementData(input, { jfPath: path, jfType: type });
+                input.value = value;
+                if (inputType === "checkbox" && type === "boolean") {
+                    input.checked = value;
+                }
+                var attribute_1 = this._pathIncludes(path, Object.keys(this._o.attributes), inputType);
+                if (attribute_1) {
+                    Object.keys(this._o.attributes[attribute_1.match]).forEach(function (attr) {
+                        input.setAttribute(attr, _this._o.attributes[attribute_1.match][attr]);
+                    });
+                }
             }
             if (!template) {
                 var label = document.createElement("label");
@@ -376,7 +391,7 @@ var JsonForm;
             this._dispatchEvent('change', {
                 path: jfPath,
                 type: jfType,
-                event: eventType
+                event: e
             });
         };
         Engine.prototype._getElementData = function (element) {
@@ -468,8 +483,8 @@ var JsonForm;
                 return a[b];
             }, window);
             return {
-                object: obj,
-                parameter: param,
+                object: obj, 
+                parameter: param, 
                 get: function () {
                     return typeof param === "undefined" ? obj : obj[param];
                 },

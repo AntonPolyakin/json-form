@@ -187,7 +187,8 @@ namespace JsonForm {
                 events: {
                     "*": "keyup keypress focus blur change",
                     "*-number": "keyup keypress focus blur change mouseup"
-                }
+                },
+                pattern: /{{\s*([^{}]+)\s*}}/g
             };
 
             // If the provided data is a JSON string, parse it into an object.
@@ -234,16 +235,16 @@ namespace JsonForm {
             // Trigger the 'init' event asynchronously after a short delay to allow other parts of the application to attach event listeners.
             setTimeout(() => {
 
-                 // Update the form with the initial data.
+                // Update the form with the initial data.
                 this.update();
 
 
-                setTimeout( () => {
+                setTimeout(() => {
 
                     // Dispatch the 'init' event to indicate that the form has been initialized.
                     this._dispatchEvent('init');
 
-                } );
+                });
 
 
             }, JsonForm.STAGE_DELAY_INITIAL);
@@ -376,16 +377,27 @@ namespace JsonForm {
 
         /**
          * Creates an input element based on the provided template and appends it to the form.
-         * @param {string} id The unique ID for the input element.
-         * @param {string} path The path of the property associated with the input element.
-         * @param {any} value The value of the input element.
-         * @param {string} inputType The type of the input element.
-         * @param {string} type The type of data for the input element.
-         * @param {string} label The label for the input element.
-         * @param {string} template The name of the template to be used for creating the input element.
+         * @param {object} options The options object containing properties for input creation.
+         * @param {string} options.id The unique ID for the input element.
+         * @param {string} options.path The path of the property associated with the input element.
+         * @param {any} options.value The value of the input element.
+         * @param {string} options.inputType The type of the input element.
+         * @param {string} options.type The type of data for the input element.
+         * @param {string} options.label The label for the input element.
+         * @param {string} options.template The name of the template to be used for creating the input element.
          * @private
          */
-        private _createFromTemplate(id: string, path: string, value: any, inputType:string, type:string, label: string, template:string): void {
+        private _createFromTemplate(options: {
+            id: string;
+            path: string;
+            value: any;
+            inputType: string;
+            type: string;
+            label: string;
+            template: string;
+        }): void {
+
+            const { id, path, value, inputType, type, label, template } = options;
 
             // Retrieve the template value from the options object using the template name.
             const templateVal = this._o.templates[template];
@@ -400,7 +412,7 @@ namespace JsonForm {
             let clone = temp.cloneNode(true);
 
             // Create a dictionary to hold the values that will replace the template placeholders.
-            var dict: object = {
+            let dict: any = {
                 id,
                 type,
                 label,
@@ -408,7 +420,7 @@ namespace JsonForm {
                 inputType,
                 value,
                 form: this
-            }
+            };
 
             // Check if there are any custom metadata configurations for the input element type.
             const meta = this._pathIncludes(path, Object.keys(this._o.meta), inputType);
@@ -418,23 +430,24 @@ namespace JsonForm {
                 dict = JsonForm.Utilities.merge(dict, this._o.meta[meta.match]);
             }
 
-
             const args = JsonForm.Utilities.merge(dict, { parsePath: this._parsePath });
 
-            clone.innerHTML = clone.innerHTML.replace(/{{[^{}]+}}/g, function (key) {
+            const pattern = this._o.pattern;
 
-                const keySeq = key.replace(/[{}]+/g, "").split("|");
+            clone.innerHTML = clone.innerHTML.replace(pattern, (match, expr) => {
+                const parts = expr.split("|");
+                const key = parts[0];
+                const templateData = parts.slice(1);
 
-                let result = dict[keySeq[0]] || "";
+                let result = dict[key] ?? "";
 
                 if (typeof result === "function") {
-                    const templateData = keySeq.length ? keySeq.slice(1, keySeq.length) : [];
-                    result = result(JsonForm.Utilities.merge(args, { templateData: templateData }));
+                    result = result(JsonForm.Utilities.merge(args, { templateData }));
                 }
 
                 return result;
+            });
 
-            }.bind(this));
 
 
             // Create a fragment using the cloned template content.
@@ -444,8 +457,8 @@ namespace JsonForm {
 
             // Append the input element to the form or the appropriate section, if defined.
             this._appendInput(fragment, path);
-
         }
+
 
 
 
@@ -464,7 +477,7 @@ namespace JsonForm {
 
             let input: any;
 
-            let inputName: string  = this.filterInputName(path);
+            let inputName: string = this.filterInputName(path);
 
             let inputLabel: string = this.getLabel(path);
 
@@ -476,7 +489,15 @@ namespace JsonForm {
             if (template) {
 
                 // If there is a template, create the input element from the template.
-                this._createFromTemplate(id, path, value, inputType, type, inputLabel, template.match);
+                this._createFromTemplate({
+                    id,
+                    path,
+                    value,
+                    inputType,
+                    type,
+                    label: inputLabel,
+                    template: template.match
+                });
 
                 // Get the created input element based on the generated ID.
                 input = document.getElementById(id);
@@ -495,34 +516,36 @@ namespace JsonForm {
                 input.setAttribute("id", id);
             }
 
-            // Set the 'name' attribute of the input element.
-            input.setAttribute("name", inputName);
+            if (input) {
+                // Set the 'name' attribute of the input element.
+                input.setAttribute("name", inputName);
 
-            // Set the 'type' attribute of the input element to the specified type.
-            if (input instanceof HTMLInputElement) {
-                input.setAttribute("type", inputType);
-            } else {
-                this._setElementData(input, { jfInputType: inputType });
-            }
+                // Set the 'type' attribute of the input element to the specified type.
+                if (input instanceof HTMLInputElement) {
+                    input.setAttribute("type", inputType);
+                } else {
+                    this._setElementData(input, { jfInputType: inputType });
+                }
 
-            this._setElementData(input, { jfPath: path, jfType: type });
+                this._setElementData(input, { jfPath: path, jfType: type });
 
-            // Set the value of the input element based on the provided data.
-            input.value = value;
+                // Set the value of the input element based on the provided data.
+                input.value = value;
 
-            // For checkbox inputs with boolean type, set the 'checked' attribute based on the value.
-            if (inputType === "checkbox" && type === "boolean") {
-                input.checked = value;
-            }
+                // For checkbox inputs with boolean type, set the 'checked' attribute based on the value.
+                if (inputType === "checkbox" && type === "boolean") {
+                    input.checked = value;
+                }
 
-            // Check if there are any custom attributes configured for the input element type.
-            let attribute = this._pathIncludes(path, Object.keys(this._o.attributes), inputType);
+                // Check if there are any custom attributes configured for the input element type.
+                let attribute = this._pathIncludes(path, Object.keys(this._o.attributes), inputType);
 
-            if (attribute) {
-                // If there are custom attributes, set them on the input element.
-                Object.keys(this._o.attributes[attribute.match]).forEach(attr => {
-                    input.setAttribute(attr, this._o.attributes[attribute.match][attr]);
-                });
+                if (attribute) {
+                    // If there are custom attributes, set them on the input element.
+                    Object.keys(this._o.attributes[attribute.match]).forEach(attr => {
+                        input.setAttribute(attr, this._o.attributes[attribute.match][attr]);
+                    });
+                }
             }
 
             if (!template) {
@@ -844,7 +867,7 @@ namespace JsonForm {
             this._dispatchEvent('change', {
                 path: jfPath,
                 type: jfType,
-                event: eventType
+                event: e
             });
 
         }
@@ -1246,8 +1269,8 @@ namespace JsonForm {
             const evt = `${JsonForm.NS_EVENTS}.${type}`;
 
 
-             // Check if logging for events is enabled by calling the '_mayLog' method with 'LogLevel.Events'.
-             if (this._mayLog(LogLevel.Events)) {
+            // Check if logging for events is enabled by calling the '_mayLog' method with 'LogLevel.Events'.
+            if (this._mayLog(LogLevel.Events)) {
                 // If logging is enabled, log the event details to the console using the '_log' method.
                 // Log the timestamp (current time) and the event name ('evt').
                 // If 'detail' is truthy (i.e., provided), also log the JSON stringified version of the 'detail' data.
@@ -1994,11 +2017,11 @@ interface IJsonForm {
     clear(): void;
 
 
-     /**
-     * Resets the form data to its initial state, optionally targeting a specific model.
-     * @param {string} model - The optional model to reset. If provided, only the specified model's data will be reset.
-     * @returns {any} The updated form data after resetting.
-     */
+    /**
+    * Resets the form data to its initial state, optionally targeting a specific model.
+    * @param {string} model - The optional model to reset. If provided, only the specified model's data will be reset.
+    * @returns {any} The updated form data after resetting.
+    */
     reset(model: string): any;
 
 
@@ -2038,7 +2061,7 @@ interface IJsonForm {
     filterInputName(path: string): string;
 
 
-    
+
 
     /**
      * Updates the target element with form data.

@@ -33,6 +33,10 @@
  */
 const fs = require('fs');
 
+/**
+ * Import the Node.js 'crypto' module for cryptographic operations.
+ */
+const crypto = require('crypto');
 
 /**
  * Import the 'node-minify' module, which provides tools for minifying JavaScript code using 
@@ -183,14 +187,16 @@ async function addHeader(input, header, props) {
 
 /**
  * Generates the Subresource Integrity (SRI) hash for a given file.
- * @param {string} file - The path to the file for which the SRI hash needs to be generated.
- * @param {function} callback - A callback function that will be invoked once the SRI hash is generated.
- * @returns {void}
+ * @param {string} file - path to file
+ * @param {function(Error|null, string=):void} callback - (err, sri)
  */
 function generateSRI(file, callback) {
-  // Use the `exec` function from the `child_process` module to execute a shell command.
-  // The command reads the file contents, computes the SHA-384 hash, and encodes it in Base64 format.
-  exec(`cat ${file} | openssl dgst -sha384 -binary | openssl base64 -A`, callback);
+  const hash = crypto.createHash('sha384');
+  const rs = fs.createReadStream(file);
+
+  rs.on('error', err => callback(err));
+  rs.on('data', chunk => hash.update(chunk));
+  rs.on('end', () => callback(null, 'sha384-' + hash.digest('base64')));
 }
 
 

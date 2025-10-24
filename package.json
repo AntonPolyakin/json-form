@@ -1,6 +1,6 @@
 {
   "name": "@rmanaf/json-form",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A lightweight JavaScript library for generating dynamic forms from JSON/Object.",
   "main": "./dist/json-form.js",
   "module": "dist/json-form.esm.js",
@@ -28,6 +28,7 @@
   "devDependencies": {
     "decomment": "^0.9.5",
     "minifier": "^0.8.1",
-    "node-minify": "^3.6.0"
+    "node-minify": "^3.6.0",
+    "typescript": "^5.9.3"
   }
 }
