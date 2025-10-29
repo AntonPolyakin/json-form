@@ -367,7 +367,7 @@ namespace JsonForm {
 
             // Iterate through each event type and attach the event listener to the element.
             for (var i = 0, iLen = events.length; i < iLen; i++) {
-                e.addEventListener(events[i], l, options);
+                if (e) e.addEventListener(events[i], l, options);
             }
 
         }
@@ -403,7 +403,7 @@ namespace JsonForm {
             const templateVal = this._o.templates[template];
 
             // Get the document associated with the form's body.
-            const doc = this._o.body.ownerDocument;
+            const doc = this._o.body?.ownerDocument || document;
 
             // Find the template element using the template value as an ID.
             const temp = <any>doc.getElementById(templateVal);
@@ -412,7 +412,7 @@ namespace JsonForm {
             let clone = temp.cloneNode(true);
 
             // Create a dictionary to hold the values that will replace the template placeholders.
-            let dict: any = {
+            var dict: object = {
                 id,
                 type,
                 label,
@@ -420,7 +420,7 @@ namespace JsonForm {
                 inputType,
                 value,
                 form: this
-            };
+            }
 
             // Check if there are any custom metadata configurations for the input element type.
             const meta = this._pathIncludes(path, Object.keys(this._o.meta), inputType);
@@ -430,24 +430,25 @@ namespace JsonForm {
                 dict = JsonForm.Utilities.merge(dict, this._o.meta[meta.match]);
             }
 
+
             const args = JsonForm.Utilities.merge(dict, { parsePath: this._parsePath });
 
             const pattern = this._o.pattern;
 
-            clone.innerHTML = clone.innerHTML.replace(pattern, (match, expr) => {
-                const parts = expr.split("|");
-                const key = parts[0];
-                const templateData = parts.slice(1);
+            clone.innerHTML = clone.innerHTML.replace(pattern, function (match, expr) {
 
-                let result = dict[key] ?? "";
+                const keySeq = expr.split("|");
+
+                let result = dict[keySeq[0]] || "";
 
                 if (typeof result === "function") {
-                    result = result(JsonForm.Utilities.merge(args, { templateData }));
+                    const templateData = keySeq.length ? keySeq.slice(1, keySeq.length) : [];
+                    result = result(JsonForm.Utilities.merge(args, { templateData: templateData }));
                 }
 
                 return result;
-            });
 
+            }.bind(this));
 
 
             // Create a fragment using the cloned template content.
@@ -457,8 +458,8 @@ namespace JsonForm {
 
             // Append the input element to the form or the appropriate section, if defined.
             this._appendInput(fragment, path);
-        }
 
+        }
 
 
 
@@ -1021,7 +1022,6 @@ namespace JsonForm {
 
             // Check if the target property is an array using the '_testArray' method.
             let ta = this._testArray(param);
-
             // Check for array
             if (ta) {
                 // If the target property is an array, modify the path accordingly.

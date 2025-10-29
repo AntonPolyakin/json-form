@@ -149,14 +149,16 @@ var JsonForm;
         Engine.prototype._bindEvents = function (e, en, l, options) {
             var events = typeof en === "string" ? en.split(' ') : en;
             for (var i = 0, iLen = events.length; i < iLen; i++) {
-                e.addEventListener(events[i], l, options);
+                if (e)
+                    e.addEventListener(events[i], l, options);
             }
         };
         Engine.prototype._createFromTemplate = function (options) {
             var _a;
+            var _b;
             var id = options.id, path = options.path, value = options.value, inputType = options.inputType, type = options.type, label = options.label, template = options.template;
             var templateVal = this._o.templates[template];
-            var doc = this._o.body.ownerDocument;
+            var doc = ((_b = this._o.body) === null || _b === void 0 ? void 0 : _b.ownerDocument) || document;
             var temp = doc.getElementById(templateVal);
             var clone = temp.cloneNode(true);
             var dict = {
@@ -175,16 +177,14 @@ var JsonForm;
             var args = JsonForm.Utilities.merge(dict, { parsePath: this._parsePath });
             var pattern = this._o.pattern;
             clone.innerHTML = clone.innerHTML.replace(pattern, function (match, expr) {
-                var _a;
-                var parts = expr.split("|");
-                var key = parts[0];
-                var templateData = parts.slice(1);
-                var result = (_a = dict[key]) !== null && _a !== void 0 ? _a : "";
+                var keySeq = expr.split("|");
+                var result = dict[keySeq[0]] || "";
                 if (typeof result === "function") {
+                    var templateData = keySeq.length ? keySeq.slice(1, keySeq.length) : [];
                     result = result(JsonForm.Utilities.merge(args, { templateData: templateData }));
                 }
                 return result;
-            });
+            }.bind(this));
             var fragment = document.importNode(clone.content, true);
             (_a = this._nodes).push.apply(_a, fragment.childNodes);
             this._appendInput(fragment, path);
