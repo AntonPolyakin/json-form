@@ -60,7 +60,6 @@ var JsonForm;
         function Engine(data, options, target) {
             if (options === void 0) { options = {}; }
             if (target === void 0) { target = null; }
-            var _this = this;
             this._nodes = [];
             this._sections = [];
             this._extensions = new Array();
@@ -100,16 +99,47 @@ var JsonForm;
             this._d = data;
             this._raw = data;
             this._o = this._extend(defaults, options);
+            if (typeof this._o.rootObject === 'undefined' || this._o.rootObject === null) {
+                this._o.rootObject = this._d;
+            }
+            if (typeof this._o.autoInit === 'undefined') {
+                this._o.autoInit = true;
+            }
             if (typeof this._o.body === 'string') {
                 this._o.body = document.getElementById(this._o.body);
             }
-            setTimeout(function () {
-                _this.update();
-                setTimeout(function () {
-                    _this._dispatchEvent('init');
-                });
-            }, JsonForm.STAGE_DELAY_INITIAL);
+            if (this._o.autoInit) {
+                this.init(true);
+            }
         }
+        Engine.prototype.init = function (useStaged) {
+            var _this = this;
+            if (useStaged) {
+                setTimeout(function () {
+                    try {
+                        _this.update();
+                    }
+                    catch (err) {
+                        if (_this._mayLog(LogLevel.Errors))
+                            _this._log('Error', 'Initialization failed', err && err.message);
+                    }
+                    setTimeout(function () {
+                        _this._dispatchEvent('init');
+                    });
+                }, JsonForm.STAGE_DELAY_INITIAL);
+            }
+            else {
+                try {
+                    this.update();
+                    this._dispatchEvent('init');
+                }
+                catch (err) {
+                    if (this._mayLog(LogLevel.Errors))
+                        this._log('Error', 'Initialization failed', err && err.message);
+                }
+            }
+            return this;
+        };
         Engine.prototype._getObjectName = function (o) {
             for (var p in window) {
                 if (Engine.WIN_PROPS.indexOf(p) > -1) {
@@ -159,7 +189,7 @@ var JsonForm;
             var id = options.id, path = options.path, value = options.value, inputType = options.inputType, type = options.type, label = options.label, template = options.template;
             var templateVal = this._o.templates[template];
             var doc = ((_b = this._o.body) === null || _b === void 0 ? void 0 : _b.ownerDocument) || document;
-            var temp = doc.getElementById(templateVal);
+            var temp = typeof this._o.templates[path] === "string" ? doc.getElementById(templateVal) : this._o.templates[path];
             var clone = temp.cloneNode(true);
             var dict = {
                 id: id,
@@ -263,7 +293,7 @@ var JsonForm;
         Engine.prototype._appendInput = function (element, path, type) {
             var _this = this;
             if (type === void 0) { type = 'input'; }
-            var parent = path.split('.').slice(0, -1).join('.');
+            var parent = this._splitPath(path).slice(0, -1).join('.');
             var skey = Object.keys(this._o.sections).filter(function (s) {
                 var res = _this._pathIncludes(path, _this._o.sections[s].children, type);
                 return res !== false;
@@ -301,7 +331,7 @@ var JsonForm;
         Engine.prototype._pathIncludes = function (path, paths, type, checkAncestors) {
             if (type === void 0) { type = 'input'; }
             if (checkAncestors === void 0) { checkAncestors = true; }
-            if (paths.length === 0) {
+            if (!paths || paths.length === 0) {
                 return false;
             }
             if (paths.indexOf(path) >= 0) {
@@ -311,9 +341,12 @@ var JsonForm;
                     mode: "exact"
                 };
             }
-            if (paths.some(function (x) { return /\/\S+\//.test(x); })) {
+            var isRegexLike = function (s) { return /^\/.*\/[gimsuy]*$/.test(s) || /^([~@;%#'])(.*?)\1([gimsuy]*)$/.test(s); };
+            if (paths.some(isRegexLike)) {
                 for (var p in paths) {
-                    if (/\/\S+\//.test(paths[p])) {
+                    if (!isRegexLike(paths[p]))
+                        continue;
+                    try {
                         var regex = Engine.stringToRegex(paths[p]);
                         if (regex.test(path)) {
                             return {
@@ -322,6 +355,9 @@ var JsonForm;
                                 mode: "regex"
                             };
                         }
+                    }
+                    catch (error) {
+                        continue;
                     }
                 }
             }
@@ -342,7 +378,7 @@ var JsonForm;
             if (checkAncestors) {
                 var pathClone = path;
                 while (pathClone.length) {
-                    var p = pathClone.split('.').slice(0, -1).join('.');
+                    var p = this._splitPath(pathClone).slice(0, -1).join('.');
                     if (paths.indexOf(p) >= 0) {
                         return {
                             path: path,
@@ -464,10 +500,27 @@ var JsonForm;
         };
         Engine.prototype._parsePath = function (p) {
             var _this = this;
-            var arr = p.split('.');
-            var obj = {};
+            if (!p) {
+                return {
+                    object: this._o.rootObject,
+                    parameter: undefined,
+                    get: function () { return _this._o.rootObject; },
+                    set: function (_v) { }
+                };
+            }
+            var arr = this._splitPath(p);
+            var base = window;
+            var startIndex = 0;
             if (arr[0] === 'window') {
-                arr.shift();
+                startIndex = 1;
+            }
+            else if (window[arr[0]] === undefined) {
+                base = this._o.rootObject || window;
+                startIndex = 0;
+            }
+            else {
+                base = window;
+                startIndex = 0;
             }
             var param = arr.pop();
             var ta = this._testArray(param);
@@ -475,25 +528,20 @@ var JsonForm;
                 arr.push(ta.value);
                 param = ta.matches[1];
             }
-            obj = arr.reduce(function (a, b) {
+            var object = arr.slice(startIndex).reduce(function (a, b) {
                 var ta = _this._testArray(b);
                 if (ta) {
                     return a[ta.value][ta.matches[1]];
                 }
                 return a[b];
-            }, window);
+            }, base);
             return {
-                object: obj, 
-                parameter: param, 
-                get: function () {
-                    return typeof param === "undefined" ? obj : obj[param];
-                },
-                set: function (value) {
-                    if (typeof param === "undefined") {
-                        return;
-                    }
-                    obj[param] = value;
-                }
+                object: object,
+                parameter: param,
+                get: function () { return typeof param === "undefined" ? object : object[param]; },
+                set: function (value) { if (typeof param === "undefined") {
+                    return;
+                } object[param] = value; }
             };
         };
         Engine.prototype._testArray = function (text) {
@@ -588,17 +636,23 @@ var JsonForm;
             var now = (new Date()).toISOString().slice(11, -1);
             console.log.apply(console, __spreadArray([now], args, false));
         };
+        Engine.prototype._splitPath = function (path) {
+            var pathSplit = /(?:(?:[^.\[\]\/\\"']{1,}\s{0,}|[^.\[\]\/\\"']\s{0,}(?<=\w|\d|\S))){1,}/gim;
+            return __spreadArray([], path.match(pathSplit), true);
+        };
         Engine.prototype._dispatchEvent = function (type, detail) {
             if (detail === void 0) { detail = null; }
             var evt = "".concat(JsonForm.NS_EVENTS, ".").concat(type);
             if (this._mayLog(LogLevel.Events)) {
                 this._log("Event", evt, JSON.stringify(detail) || "");
             }
-            if (detail) {
-                this._o.body.dispatchEvent(new CustomEvent(evt, { detail: detail }));
-            }
-            else {
-                this._o.body.dispatchEvent(new Event(evt));
+            if (this._o.body) {
+                if (detail) {
+                    this._o.body.dispatchEvent(new CustomEvent(evt, { detail: detail }));
+                }
+                else {
+                    this._o.body.dispatchEvent(new Event(evt));
+                }
             }
         };
         Engine.prototype.dispatchEvent = function (type, detail) {

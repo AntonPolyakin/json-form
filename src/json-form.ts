@@ -220,7 +220,15 @@ namespace JsonForm {
             // Merge the provided options with the default options to create the final options object (_o).
             this._o = this._extend(defaults, options);
 
+            // by default resolve paths relative to provided data object unless explicit rootObject given
+            if (typeof this._o.rootObject === 'undefined' || this._o.rootObject === null) {
+                this._o.rootObject = this._d;
+            }
 
+            // backward-compatible auto-init option:
+            if (typeof this._o.autoInit === 'undefined') {
+                this._o.autoInit = true;
+            }
 
             // Check if the type of this._o.body is 'string'
             if (typeof this._o.body === 'string') {
@@ -232,26 +240,44 @@ namespace JsonForm {
             }
 
 
-            // Trigger the 'init' event asynchronously after a short delay to allow other parts of the application to attach event listeners.
-            setTimeout(() => {
-
-                // Update the form with the initial data.
-                this.update();
-
-
-                setTimeout(() => {
-
-                    // Dispatch the 'init' event to indicate that the form has been initialized.
-                    this._dispatchEvent('init');
-
-                });
-
-
-            }, JsonForm.STAGE_DELAY_INITIAL);
+            // initialization: either automatically or wait for an explicit call to init()
+            if (this._o.autoInit) {
+                this.init(true);
+            }
 
         }
 
-
+        /**
+         * Explicit initialization method.
+         * When useStaged = true, legacy behavior with setTimeout will be used..
+         */
+        public init(useStaged?: boolean): IJsonForm {
+            if (useStaged) {
+                // backward-compatible staged init (preserve original timing behavior if caller requests it)
+                // Trigger the 'init' event asynchronously after a short delay to allow other parts of the application to attach event listeners.
+                setTimeout(() => {
+                    try {
+                        // Update the form with the initial data.
+                        this.update();
+                    } catch (err) {
+                        if (this._mayLog(LogLevel.Errors)) this._log('Error', 'Initialization failed', err && err.message);
+                    }
+                    setTimeout(() => {
+                        // Dispatch the 'init' event to indicate that the form has been initialized.
+                        this._dispatchEvent('init');
+                    });
+                }, JsonForm.STAGE_DELAY_INITIAL);
+            } else {
+                // immediate init
+                try {
+                    this.update();
+                    this._dispatchEvent('init');
+                } catch (err) {
+                    if (this._mayLog(LogLevel.Errors)) this._log('Error', 'Initialization failed', err && err.message);
+                }
+            }
+            return this;
+        }
 
         /**
          * Finds the name of the given object in the global window scope.
@@ -405,8 +431,8 @@ namespace JsonForm {
             // Get the document associated with the form's body.
             const doc = this._o.body?.ownerDocument || document;
 
-            // Find the template element using the template value as an ID.
-            const temp = <any>doc.getElementById(templateVal);
+            // Get a template or find a template element using the template value as an identifier.
+            const temp = typeof this._o.templates[path] === "string" ? <any>doc.getElementById(templateVal) : this._o.templates[path];
 
             // Clone the template element to create a new instance of the input element.
             let clone = temp.cloneNode(true);
@@ -599,7 +625,7 @@ namespace JsonForm {
         private _appendInput(element: HTMLElement, path: string, type: string = 'input'): HTMLElement {
 
             // Extract the parent path (all but the last part) from the provided path.
-            let parent = path.split('.').slice(0, -1).join('.');
+            let parent = this._splitPath(path).slice(0, -1).join('.');
 
             // Check if the input element belongs to a section by searching for a matching section key in the options.
             let skey = Object.keys(this._o.sections).filter(s => {
@@ -678,7 +704,7 @@ namespace JsonForm {
         private _pathIncludes(path: string, paths: string[], type: string = 'input', checkAncestors: boolean = true): any {
 
             // Return false if the paths array is empty
-            if (paths.length === 0) {
+            if (!paths || paths.length === 0) {
                 return false;
             }
 
@@ -691,15 +717,21 @@ namespace JsonForm {
                 };
             }
 
+
+            // Check for regex-like entries in `paths`.
+            // Support both plain /pattern/flags and alternative-delimiter forms that stringToRegex understands.
+            const isRegexLike = (s: string) => /^\/.*\/[gimsuy]*$/.test(s) || /^([~@;%#'])(.*?)\1([gimsuy]*)$/.test(s);
+
             // Check for regex match
-            if (paths.some(x => /\/\S+\//.test(x))) {
+            if (paths.some(isRegexLike)) {
 
                 // Loop through the paths array to find a regex match
                 for (let p in paths) {
 
                     // Check if the path element in paths array is a regex pattern
-                    if (/\/\S+\//.test(paths[p])) {
+                    if (!isRegexLike(paths[p])) continue;
 
+                    try {
                         // Convert the regex pattern to a regular expression
                         let regex = Engine.stringToRegex(paths[p]);
 
@@ -713,6 +745,9 @@ namespace JsonForm {
                                 mode: "regex"
                             };
                         }
+                    } catch (error) {
+                        // Ignoring incorrect patterns
+                        continue;
                     }
                 }
             }
@@ -749,7 +784,7 @@ namespace JsonForm {
                 while (pathClone.length) {
 
                     // Get the ancestor path by removing the last segment of the path
-                    let p = pathClone.split('.').slice(0, -1).join('.');
+                    let p = this._splitPath(pathClone).slice(0, -1).join('.');
 
                     // Check if the ancestor path is in the paths array
                     if (paths.indexOf(p) >= 0) {
@@ -1007,54 +1042,52 @@ namespace JsonForm {
          * @private
          */
         private _parsePath(p) {
-            // Split the path into an array of segments using the '.' separator.
-            const arr: string[] = p.split('.');
-            // Initialize an empty object to store the reference to the 'window' object or its property.
-            let obj = {};
-
-            // Check if the path starts with 'window' and remove it from the path if present.
-            if (arr[0] === 'window') {
-                arr.shift();
+            // Resolve paths relative to `rootObject` (defaults to `data` passed into ctor).
+            // If path explicitly starts with 'window' or the first token exists on window, treat as absolute global.
+            if (!p) {
+                return {
+                    object: this._o.rootObject,
+                    parameter: undefined,
+                    get: () => { return this._o.rootObject; },
+                    set: (_v) => { /* nothing */ }
+                };
             }
 
-            // Pop the last element from the array, which represents the target property name.
-            let param = arr.pop();
+            const arr: string[] = this._splitPath(p);
+            let base: any = window;
+            let startIndex = 0;
+            if (arr[0] === 'window') {
+                startIndex = 1;
+            } else if ((window as any)[arr[0]] === undefined) {
+                // not a global name — resolve relative to provided rootObject
+                base = this._o.rootObject || window;
+                startIndex = 0;
+            } else {
+                // first token exists on window -> treat as absolute
+                base = window;
+                startIndex = 0;
+            }
 
-            // Check if the target property is an array using the '_testArray' method.
+            let param = arr.pop();
             let ta = this._testArray(param);
-            // Check for array
             if (ta) {
-                // If the target property is an array, modify the path accordingly.
                 arr.push(ta.value);
                 param = ta.matches[1];
             }
 
-            // Reduce the array of segments to get the reference to the target object within the 'window'.
-            obj = arr.reduce((a, b) => {
+            const object = arr.slice(startIndex).reduce((a, b) => {
                 let ta = this._testArray(b);
                 if (ta) {
-                    // If a segment is an array element, access the specific element of the array.
                     return a[ta.value][ta.matches[1]];
                 }
-                // Otherwise, access the property within the object.
                 return a[b];
-            }, window);
+            }, base);
 
-            // Return an object with utility methods 'get' and 'set' to access the property value.
             return {
-                object: obj,                        // The reference to the target object.
-                parameter: param,                   // The name of the target property.
-                get: () => {
-                    // Method to get the value of the target property.
-                    return typeof param === "undefined" ? obj : obj[param];
-                },
-                set: (value) => {
-                    // Method to set the value of the target property.
-                    if (typeof param === "undefined") {
-                        return;
-                    }
-                    obj[param] = value;
-                }
+                object: object,
+                parameter: param,
+                get: () => { return typeof param === "undefined" ? object : object[param]; },
+                set: (value) => { if (typeof param === "undefined") { return; } object[param] = value; }
             };
         }
 
@@ -1258,6 +1291,20 @@ namespace JsonForm {
 
 
         /**
+         * Splits a path string into segments using a regular expression.
+         * Supports splitting while ignoring separators inside brackets, quotes, and other special characters.
+         *
+         * @param {string} path - The path string to split into segments.
+         * @returns {string[]} - An array of path segments. Returns an empty array if the path does not match the pattern.
+         *
+         */
+        private _splitPath(path){
+            const pathSplit = /(?:(?:[^.\[\]\/\\"']{1,}\s{0,}|[^.\[\]\/\\"']\s{0,}(?<=\w|\d|\S))){1,}/gim;
+            return [...path.match(pathSplit)];
+        }
+
+
+        /**
          * Dispatches a custom event with the provided type and optional detail.
          * @param {string} type The type of event.
          * @param {any} detail The detail of the event.
@@ -1278,15 +1325,17 @@ namespace JsonForm {
             }
 
 
-            // Check if 'detail' is provided (truthy).
-            if (detail) {
-                // If 'detail' is truthy, create a new CustomEvent with the 'evt' name and 'detail' data.
-                // CustomEvent allows passing custom data along with the event.
-                this._o.body.dispatchEvent(new CustomEvent(evt, { detail: detail }));
-            } else {
-                // If 'detail' is falsy (not provided), create a regular Event with just the 'evt' name.
-                // Regular Event is a simple event without custom data.
-                this._o.body.dispatchEvent(new Event(evt));
+            // Check if 'this._o.body' is provided (truthy).
+            if (this._o.body) {
+                if (detail) {
+                    // If 'detail' is truthy, create a new CustomEvent with the 'evt' name and 'detail' data.
+                    // CustomEvent allows passing custom data along with the event.
+                    this._o.body.dispatchEvent(new CustomEvent(evt, { detail: detail }));
+                } else {
+                    // If 'detail' is falsy (not provided), create a regular Event with just the 'evt' name.
+                    // Regular Event is a simple event without custom data.
+                    this._o.body.dispatchEvent(new Event(evt));
+                }
             }
 
 
