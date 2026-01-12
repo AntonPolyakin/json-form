@@ -100,6 +100,37 @@ namespace JsonForm {
             return r;
         }
 
+        
+        /**
+         * Splits a path string into segments using a regular expression.
+         * Supports splitting while ignoring separators inside brackets, quotes, and other special characters.
+         *
+         * @param {string} path - The path string to split into segments.
+         * @returns {string[]} - An array of path segments. Returns an empty array if the path does not match the pattern.
+         *
+         */
+        public static splitPath(path: string): string[] {
+            if (!path) return [];
+
+            var segmentRe = /([^[.\]]+)|\[(\d+|(["'])(.*?)\3)\]/g;
+            var segments: string[] = [];
+            var m: RegExpExecArray | null;
+
+            while ((m = segmentRe.exec(path))) {
+                if (m[1]) {
+                    segments.push(m[1]);
+                } else if (m[2]) {
+                    if (/^\d+$/.test(m[2])) {
+                        segments.push(m[2]);
+                    } else {
+                        segments.push(m[4] || m[2]);
+                    }
+                }
+            }
+
+            return segments.slice(0);
+        }
+
     }
 
 
@@ -162,6 +193,19 @@ namespace JsonForm {
          * @private
          */
         private _extensions: IExtensionInstance<Extension>[] = new Array<any>();
+
+        /**
+         * Index of elements by their jfPath.
+         * Each jfPath maps to an array of HTMLElements found under that path.
+         * This speeds up lookups so you don’t have to traverse the DOM every time.
+        */
+        private _elementIndex: { [key: string]: HTMLElement[] } = {};
+
+        /**
+         * Flag that controls whether indexing is active.
+         * When false, the component works without maintaining the element index.
+        */
+        private _indexEnabled: boolean = true;
 
 
         /**
@@ -556,6 +600,16 @@ namespace JsonForm {
 
                 this._setElementData(input, { jfPath: path, jfType: type });
 
+                try {
+                    if (this._indexEnabled && typeof path === 'string') {
+                        if (!this._elementIndex[path]) {
+                            this._elementIndex[path] = [];
+                        }
+                        this._elementIndex[path].push(input);
+                    }
+                } catch (e) { }
+
+
                 // Set the value of the input element based on the provided data.
                 input.value = value;
 
@@ -625,7 +679,7 @@ namespace JsonForm {
         private _appendInput(element: HTMLElement, path: string, type: string = 'input'): HTMLElement {
 
             // Extract the parent path (all but the last part) from the provided path.
-            let parent = this._splitPath(path).slice(0, -1).join('.');
+            let parent = JsonForm.Utilities.splitPath(path).slice(0, -1).join('.');
 
             // Check if the input element belongs to a section by searching for a matching section key in the options.
             let skey = Object.keys(this._o.sections).filter(s => {
@@ -784,7 +838,7 @@ namespace JsonForm {
                 while (pathClone.length) {
 
                     // Get the ancestor path by removing the last segment of the path
-                    let p = this._splitPath(pathClone).slice(0, -1).join('.');
+                    let p = JsonForm.Utilities.splitPath(pathClone).slice(0, -1).join('.');
 
                     // Check if the ancestor path is in the paths array
                     if (paths.indexOf(p) >= 0) {
@@ -999,20 +1053,26 @@ namespace JsonForm {
                 element = this._o.body;
             }
 
-            // Loop through each property in the 'data' object
             for (const property in data) {
                 if (data.hasOwnProperty(property)) {
                     if (this._o.secure === true) {
-                        // If in "secure" mode, create or update the 'jf' property of the element to store the data
                         element.jf = element.jf || {};
                         element.jf[property] = data[property];
                     } else {
                         if (data[property]) {
-                            // Otherwise, set or update the data property in the element's dataset
-                            element.dataset[property] = typeof data[property] === 'string' ? data[property] : JSON.stringify(data[property]);
+                            var newVal = typeof data[property] === 'string'
+                                ? data[property]
+                                : JSON.stringify(data[property]);
+
+                            if (element.dataset[property] !== newVal) {
+                                element.dataset[property] = newVal;
+                            }
                         } else {
-                            delete element.dataset[property];
+                            if (element.dataset[property] !== undefined) {
+                                delete element.dataset[property];
+                            }
                         }
+
                     }
                 }
             }
@@ -1053,7 +1113,7 @@ namespace JsonForm {
                 };
             }
 
-            const arr: string[] = this._splitPath(p);
+            const arr: string[] = JsonForm.Utilities.splitPath(p);
             let base: any = window;
             let startIndex = 0;
             if (arr[0] === 'window') {
@@ -1262,6 +1322,10 @@ namespace JsonForm {
             if (dispatch) {
                 this._dispatchEvent('clear');
             }
+
+            try {
+                this._elementIndex = {};
+            } catch (e) { }
         }
 
 
@@ -1289,19 +1353,6 @@ namespace JsonForm {
         }
 
 
-
-        /**
-         * Splits a path string into segments using a regular expression.
-         * Supports splitting while ignoring separators inside brackets, quotes, and other special characters.
-         *
-         * @param {string} path - The path string to split into segments.
-         * @returns {string[]} - An array of path segments. Returns an empty array if the path does not match the pattern.
-         *
-         */
-        private _splitPath(path){
-            const pathSplit = /(?:(?:[^.\[\]\/\\"']{1,}\s{0,}|[^.\[\]\/\\"']\s{0,}(?<=\w|\d|\S))){1,}/gim;
-            return [...path.match(pathSplit)];
-        }
 
 
         /**
@@ -1635,24 +1686,21 @@ namespace JsonForm {
          * @returns {HTMLElement[] | undefined} - An array of matching HTML input elements or undefined if none are found.
          */
         public find(...paths: string[]): HTMLElement[] | undefined {
+            if (paths && paths.length === 1) {
+                var p = paths[0];
+                if (this._elementIndex[p]) {
+                    return this._elementIndex[p].slice(0);
+                }
+            }
 
-            // Get all input elements within the form's body
-            let inputs = [...this._o.body.querySelectorAll('input')];
+            var inputs = [].slice.call(this._o.body.querySelectorAll('input'));
 
-            // If paths are provided, filter the input elements based on matching paths
             if (paths.length) {
                 inputs = inputs.filter(x => this._pathIncludes(this._getElementData(x, 'jfPath'), paths));
             }
 
-            // Return the array of matching input elements or undefined if none are found
-            if (inputs.length) {
-                return inputs;
-            }
-
-            return undefined;
+            return inputs.length ? inputs : undefined;
         }
-
-
 
 
 

@@ -53,6 +53,27 @@ var JsonForm;
             }
             return r;
         };
+        Utilities.splitPath = function (path) {
+            if (!path)
+                return [];
+            var segmentRe = /([^[.\]]+)|\[(\d+|(["'])(.*?)\3)\]/g;
+            var segments = [];
+            var m;
+            while ((m = segmentRe.exec(path))) {
+                if (m[1]) {
+                    segments.push(m[1]);
+                }
+                else if (m[2]) {
+                    if (/^\d+$/.test(m[2])) {
+                        segments.push(m[2]);
+                    }
+                    else {
+                        segments.push(m[4] || m[2]);
+                    }
+                }
+            }
+            return segments.slice(0);
+        };
         return Utilities;
     }());
     JsonForm.Utilities = Utilities;
@@ -63,6 +84,8 @@ var JsonForm;
             this._nodes = [];
             this._sections = [];
             this._extensions = new Array();
+            this._elementIndex = {};
+            this._indexEnabled = true;
             var defaults = {
                 body: document.body,
                 model: "",
@@ -257,6 +280,15 @@ var JsonForm;
                     this._setElementData(input, { jfInputType: inputType });
                 }
                 this._setElementData(input, { jfPath: path, jfType: type });
+                try {
+                    if (this._indexEnabled && typeof path === 'string') {
+                        if (!this._elementIndex[path]) {
+                            this._elementIndex[path] = [];
+                        }
+                        this._elementIndex[path].push(input);
+                    }
+                }
+                catch (e) { }
                 input.value = value;
                 if (inputType === "checkbox" && type === "boolean") {
                     input.checked = value;
@@ -293,7 +325,7 @@ var JsonForm;
         Engine.prototype._appendInput = function (element, path, type) {
             var _this = this;
             if (type === void 0) { type = 'input'; }
-            var parent = this._splitPath(path).slice(0, -1).join('.');
+            var parent = JsonForm.Utilities.splitPath(path).slice(0, -1).join('.');
             var skey = Object.keys(this._o.sections).filter(function (s) {
                 var res = _this._pathIncludes(path, _this._o.sections[s].children, type);
                 return res !== false;
@@ -378,7 +410,7 @@ var JsonForm;
             if (checkAncestors) {
                 var pathClone = path;
                 while (pathClone.length) {
-                    var p = this._splitPath(pathClone).slice(0, -1).join('.');
+                    var p = JsonForm.Utilities.splitPath(pathClone).slice(0, -1).join('.');
                     if (paths.indexOf(p) >= 0) {
                         return {
                             path: path,
@@ -486,10 +518,17 @@ var JsonForm;
                     }
                     else {
                         if (data[property]) {
-                            element.dataset[property] = typeof data[property] === 'string' ? data[property] : JSON.stringify(data[property]);
+                            var newVal = typeof data[property] === 'string'
+                                ? data[property]
+                                : JSON.stringify(data[property]);
+                            if (element.dataset[property] !== newVal) {
+                                element.dataset[property] = newVal;
+                            }
                         }
                         else {
-                            delete element.dataset[property];
+                            if (element.dataset[property] !== undefined) {
+                                delete element.dataset[property];
+                            }
                         }
                     }
                 }
@@ -508,7 +547,7 @@ var JsonForm;
                     set: function (_v) { }
                 };
             }
-            var arr = this._splitPath(p);
+            var arr = JsonForm.Utilities.splitPath(p);
             var base = window;
             var startIndex = 0;
             if (arr[0] === 'window') {
@@ -624,6 +663,10 @@ var JsonForm;
             if (dispatch) {
                 this._dispatchEvent('clear');
             }
+            try {
+                this._elementIndex = {};
+            }
+            catch (e) { }
         };
         Engine.prototype._mayLog = function (level) {
             return Engine.LOG_LEVEL !== LogLevel.None && (Engine.LOG_LEVEL === level || Engine.LOG_LEVEL == LogLevel.All);
@@ -635,10 +678,6 @@ var JsonForm;
             }
             var now = (new Date()).toISOString().slice(11, -1);
             console.log.apply(console, __spreadArray([now], args, false));
-        };
-        Engine.prototype._splitPath = function (path) {
-            var pathSplit = /(?:(?:[^.\[\]\/\\"']{1,}\s{0,}|[^.\[\]\/\\"']\s{0,}(?<=\w|\d|\S))){1,}/gim;
-            return __spreadArray([], path.match(pathSplit), true);
         };
         Engine.prototype._dispatchEvent = function (type, detail) {
             if (detail === void 0) { detail = null; }
@@ -750,14 +789,17 @@ var JsonForm;
             for (var _i = 0; _i < arguments.length; _i++) {
                 paths[_i] = arguments[_i];
             }
-            var inputs = __spreadArray([], this._o.body.querySelectorAll('input'), true);
+            if (paths && paths.length === 1) {
+                var p = paths[0];
+                if (this._elementIndex[p]) {
+                    return this._elementIndex[p].slice(0);
+                }
+            }
+            var inputs = [].slice.call(this._o.body.querySelectorAll('input'));
             if (paths.length) {
                 inputs = inputs.filter(function (x) { return _this._pathIncludes(_this._getElementData(x, 'jfPath'), paths); });
             }
-            if (inputs.length) {
-                return inputs;
-            }
-            return undefined;
+            return inputs.length ? inputs : undefined;
         };
         Engine.prototype.getPath = function (element) {
             return this._getElementData(this._validateElement(element), 'jfPath');
